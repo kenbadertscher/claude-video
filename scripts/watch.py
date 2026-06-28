@@ -18,7 +18,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from download import download, is_url  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract, format_time, get_metadata, parse_time  # noqa: E402
 from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
-from whisper import load_api_key, transcribe_video  # noqa: E402
+from whisper import resolve_backend, transcribe_video  # noqa: E402
 
 
 def main() -> int:
@@ -40,9 +40,10 @@ def main() -> int:
     )
     ap.add_argument(
         "--whisper",
-        choices=["groq", "openai"],
+        choices=["local", "groq", "openai"],
         default=None,
-        help="Force a specific Whisper backend. Default: prefer Groq, fall back to OpenAI.",
+        help="Force a transcription backend. Default: prefer local whisper.cpp (no key), "
+             "then Groq/OpenAI if a key is set.",
     )
     args = ap.parse_args()
 
@@ -117,8 +118,8 @@ def main() -> int:
             print(f"[watch] subtitle parse failed: {exc}", file=sys.stderr)
 
     if not transcript_segments and not args.no_whisper:
-        backend, api_key = load_api_key(args.whisper)
-        if backend and api_key:
+        backend, api_key = resolve_backend(args.whisper)
+        if backend:
             try:
                 all_segments, used_backend = transcribe_video(
                     video_path,
@@ -133,9 +134,9 @@ def main() -> int:
                 print(f"[watch] whisper fallback failed: {exc}", file=sys.stderr)
         else:
             hint = (
-                f"--whisper {args.whisper} was set but the matching API key is missing"
+                f"--whisper {args.whisper} was set but its API key is missing"
                 if args.whisper else
-                "no subtitles and no Whisper API key found"
+                "no captions, no local whisper.cpp model, and no Whisper API key found"
             )
             setup_py = SCRIPT_DIR / "setup.py"
             print(

@@ -30,6 +30,9 @@ from pathlib import Path
 REQUIRED_BINARIES = ["ffmpeg", "ffprobe", "yt-dlp"]
 CONFIG_DIR = Path.home() / ".config" / "watch"
 CONFIG_FILE = CONFIG_DIR / ".env"
+# Local whisper.cpp backend (key-free default). Overridable via env.
+WHISPER_CLI_DEFAULT = "whisper-cli"
+MODEL_DEFAULT = CONFIG_DIR / "models" / "ggml-small.en.bin"
 ENV_TEMPLATE = """# /watch API configuration
 #
 # Whisper transcription fallback — used only when yt-dlp cannot get captions
@@ -101,6 +104,23 @@ def _have_api_key() -> tuple[bool, str | None]:
     if _read_env_key("OPENAI_API_KEY"):
         return True, "openai"
     return False, None
+
+
+def _local_available() -> bool:
+    """True when local whisper.cpp is usable: a CLI on PATH + a GGML model file."""
+    cli = (os.environ.get("WATCH_WHISPER_CLI") or "").strip() or WHISPER_CLI_DEFAULT
+    cli_path = Path(cli).expanduser()
+    has_cli = bool(shutil.which(cli)) or (cli_path.is_file() and os.access(cli_path, os.X_OK))
+    raw = (os.environ.get("WATCH_WHISPER_MODEL") or "").strip()
+    model = Path(raw).expanduser() if raw else MODEL_DEFAULT
+    return has_cli and model.is_file()
+
+
+def _have_transcription() -> tuple[bool, str | None]:
+    """A usable transcription backend: local whisper.cpp (preferred) or an API key."""
+    if _local_available():
+        return True, "local"
+    return _have_api_key()
 
 
 def is_first_run() -> bool:
@@ -199,11 +219,12 @@ def _install_hint_windows(missing: list[str]) -> str:
 def _status() -> dict:
     """Structured preflight snapshot."""
     missing = _check_binaries()
-    has_key, backend = _have_api_key()
+    has_transcription, backend = _have_transcription()
+    has_key, _ = _have_api_key()
 
-    if not missing and has_key:
+    if not missing and has_transcription:
         status = "ready"
-    elif missing and not has_key:
+    elif missing and not has_transcription:
         status = "needs_install_and_key"
     elif missing:
         status = "needs_install"
@@ -216,6 +237,7 @@ def _status() -> dict:
         "missing_binaries": missing,
         "whisper_backend": backend,
         "has_api_key": has_key,
+        "local_available": _local_available(),
         "config_file": str(CONFIG_FILE),
         "platform": platform.system(),
     }
@@ -237,8 +259,8 @@ def cmd_check() -> int:
     parts = []
     if s["missing_binaries"]:
         parts.append(f"missing binaries: {', '.join(s['missing_binaries'])}")
-    if not s["has_api_key"]:
-        parts.append("no Whisper API key (GROQ_API_KEY or OPENAI_API_KEY)")
+    if not s["whisper_backend"]:
+        parts.append("no transcription backend (a local whisper.cpp model, or GROQ/OPENAI key)")
     installer = Path(__file__).resolve()
     sys.stderr.write(
         f"[watch] setup incomplete ({'; '.join(parts)}). "
@@ -246,7 +268,7 @@ def cmd_check() -> int:
     )
     sys.stderr.flush()
 
-    if s["missing_binaries"] and not s["has_api_key"]:
+    if s["missing_binaries"] and not s["whisper_backend"]:
         return 4
     if s["missing_binaries"]:
         return 2
@@ -293,22 +315,27 @@ def cmd_install() -> int:
     else:
         print(f"[setup] config exists: {CONFIG_FILE}")
 
-    has_key, backend = _have_api_key()
-    if has_key:
+    has_transcription, backend = _have_transcription()
+    if has_transcription:
         _write_setup_complete()
-        print(f"[setup] ready. whisper backend: {backend}")
+        print(f"[setup] ready. transcription backend: {backend}")
         if installed_deps:
             print("[setup] installed dependencies; /watch is fully set up.")
         return 0
 
     print("")
-    print("[setup] one step left: add a Whisper API key.")
+    print("[setup] one step left: add a transcription backend (no API key required).")
     print("")
-    print(f"  Edit {CONFIG_FILE} and set either:")
-    print("    GROQ_API_KEY=...    (preferred — cheaper, faster; get one at console.groq.com/keys)")
-    print("    OPENAI_API_KEY=...  (fallback; get one at platform.openai.com/api-keys)")
+    print("  Recommended — local whisper.cpp (free, private, no key):")
+    print("    brew install whisper-cpp")
+    print(f"    mkdir -p {MODEL_DEFAULT.parent}")
+    print("    curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin \\")
+    print(f"      -o {MODEL_DEFAULT}")
     print("")
-    print("  Without a key, /watch still works but videos without captions come back frames-only.")
+    print(f"  Or use a hosted key instead — edit {CONFIG_FILE} and set GROQ_API_KEY")
+    print("    (console.groq.com/keys) or OPENAI_API_KEY (platform.openai.com/api-keys).")
+    print("")
+    print("  Without either, /watch still works but caption-less videos come back frames-only.")
     return 3
 
 

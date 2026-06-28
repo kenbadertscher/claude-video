@@ -43,6 +43,14 @@ HAS_GROQ="$(read_key GROQ_API_KEY)"
 HAS_OPENAI="$(read_key OPENAI_API_KEY)"
 SETUP_COMPLETE="$(read_key SETUP_COMPLETE)"
 
+# Local whisper.cpp availability — the key-free transcription default.
+WHISPER_CLI="${WATCH_WHISPER_CLI:-whisper-cli}"
+WHISPER_MODEL="${WATCH_WHISPER_MODEL:-$HOME/.config/watch/models/ggml-small.en.bin}"
+HAS_LOCAL=""
+if command -v "$WHISPER_CLI" >/dev/null 2>&1 && [[ -f "$WHISPER_MODEL" ]]; then
+  HAS_LOCAL="yes"
+fi
+
 # Fully configured → silent (Claude can surface status on demand via --check).
 if [[ "$SETUP_COMPLETE" == "true" && -n "$HAS_FFMPEG" && -n "$HAS_YTDLP" ]]; then
   exit 0
@@ -51,8 +59,8 @@ fi
 # First-run / partially-configured → one-line hint.
 if [[ -z "$HAS_FFMPEG" || -z "$HAS_YTDLP" ]]; then
   echo "/watch: needs ffmpeg + yt-dlp. Run \`python3 \$CLAUDE_PLUGIN_ROOT/scripts/setup.py\` once to install and scaffold config."
-elif [[ -z "$HAS_GROQ" && -z "$HAS_OPENAI" ]]; then
-  echo "/watch: ready for videos with native captions. Add GROQ_API_KEY (preferred) or OPENAI_API_KEY to ~/.config/watch/.env to unlock Whisper fallback."
-else
+elif [[ -n "$HAS_LOCAL" || -n "$HAS_GROQ" || -n "$HAS_OPENAI" ]]; then
   echo "/watch: ready."
+else
+  echo "/watch: ready for captioned videos. For caption-less ones, install a local whisper.cpp model (no key needed) or set an API key — run \`python3 \$CLAUDE_PLUGIN_ROOT/scripts/setup.py\`."
 fi
